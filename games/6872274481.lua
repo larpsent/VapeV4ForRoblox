@@ -3838,234 +3838,206 @@ run(function()
 end)
 	
 run(function()
-    local Prediction
-    local AutoCharge
-    local TargetPart
-    local Targets
-    local FOV
-    local Sort
-    local OtherProjectiles
-    local Blacklist
-    local rayCheck = RaycastParams.new()
-    rayCheck.FilterType = Enum.RaycastFilterType.Include
-    rayCheck.FilterDescendantsInstances = {workspace:FindFirstChild('Map')}
-    local launchHook
-    local hookThread
+	local Prediction
+	local AutoCharge
+	local TargetPart
+	local Targets
+	local FOV
+	local Sort
+	local OtherProjectiles
+	local Blacklist
+	local rayCheck = RaycastParams.new()
+	rayCheck.FilterType = Enum.RaycastFilterType.Include
+	rayCheck.FilterDescendantsInstances = {workspace:FindFirstChild('Map')}
+	local old
 
-    local function getMousePosition()
-        if inputService.TouchEnabled then
-            return gameCamera.ViewportSize / 2
-        end
-        return inputService:GetMouseLocation()
-    end
+	local function getMousePosition()
+		if inputService.TouchEnabled then
+			return gameCamera.ViewportSize / 2
+		end
+		return inputService:GetMouseLocation()
+	end
 
-    local function getPosition(ent)
-        if TargetPart.Value == 'Closest' then
-            local localPosition, magnitude, part = getMousePosition(), 9e9, nil
-            for _, v in ent:GetChildren() do
-                local ok, pos = pcall(function() return v.Position end)
-                if ok then
-                    local position, vis = gameCamera:WorldToViewportPoint(pos)
-                    if vis then
-                        local mag = (localPosition - Vector2.new(position.X, position.Y)).Magnitude
-                        if mag < magnitude then
-                            magnitude = mag
-                            part = v
-                        end
-                    end
-                end
-            end
-            return part and part.Position or ent.PrimaryPart.Position
-        elseif TargetPart.Value == 'Dynamic' then
-            local tool = store.hand.tool
-            if tool and tool.Name:find('headhunter') then
-                return ent.Head.Position
-            end
-            return ent.PrimaryPart.Position
-        end
-        return nil
-    end
+	local function getPosition(ent)
+		if TargetPart.Value == 'Closest' then
+			local localPosition, magnitude, part = getMousePosition(), 9e9, nil
+			for _, v in ent:GetChildren() do
+				local ok, _ = pcall(function() return v.Position end)
+				if ok then
+					local position, vis = gameCamera:WorldToViewportPoint(v.Position)
+					if vis then
+						local mag = (localPosition - Vector2.new(position.X, position.Y)).Magnitude
+						if mag < magnitude then
+							magnitude = mag
+							part = v
+						end
+					end
+				end
+			end
+			return part and part.Position or ent.PrimaryPart.Position
+		elseif TargetPart.Value == 'Dynamic' then
+			local tool = store.hand.tool
+			if tool and tool.Name:find('headhunter') then
+				return ent.Head.Position
+			end
+			return ent.PrimaryPart.Position
+		end
+		return nil
+	end
 
-    local function registerHook()
-        if launchHook then
-            launchHook()
-            launchHook = nil
-        end
+	local ProjectileAimbot = vape.Categories.Blatant:CreateModule({
+		Name = 'Projectile Aimbot',
+		Function = function(callback)
+			if callback then
+				old = bedwars.ProjectileController.calculateImportantLaunchValues
+				bedwars.ProjectileController.calculateImportantLaunchValues = function(...)
+					local self, projmeta, worldmeta, origin, shootpos = ...
+					local plr = entitylib.EntityMouse({
+						Part = 'RootPart',
+						Range = FOV.Value,
+						Players = Targets.Players.Enabled,
+						NPCs = Targets.NPCs.Enabled,
+						Wallcheck = Targets.Walls.Enabled,
+						Sort = sortmethods[Sort.Value or 'Distance'],
+						Origin = entitylib.isAlive and (shootpos or entitylib.character.RootPart.Position) or Vector3.zero
+					})
 
-        launchHook = bedwars.ProjectileLaunchHook:Add('ProjectileAimbot', 999, function(nextLaunch, ...)
-            local self, projmeta, worldmeta, origin, shootpos = ...
+					if plr then
+						local pos = shootpos or self:getLaunchPosition(origin)
+						if not pos then
+							return old(...)
+						end
 
-            local plr = entitylib.EntityMouse({
-                Part = 'RootPart',
-                Range = FOV.Value,
-                Players = Targets.Players.Enabled,
-                NPCs = Targets.NPCs.Enabled,
-                Wallcheck = Targets.Walls.Enabled,
-                Sort = sortmethods[Sort.Value or 'Distance'],
-                Origin = entitylib.isAlive and (shootpos or entitylib.character.RootPart.Position) or Vector3.zero,
-            })
+						if (not OtherProjectiles.Enabled) and not projmeta.projectile:find('arrow') then
+							return old(...)
+						end
 
-            if plr then
-                local pos = shootpos or self:getLaunchPosition(origin)
-                if not pos then
-                    return nextLaunch(...)
-                end
+						local projKey = (projmeta.projectile == 'glue_trap' or projmeta.projectile == 'glue_projectile') and 'gloop' or projmeta.projectile
+						if table.find(Blacklist.ListEnabled or {}, projKey) then
+							return old(...)
+						end
 
-                if (not OtherProjectiles.Enabled) and not projmeta.projectile:find('arrow') then
-                    return nextLaunch(...)
-                end
+						local ok, meta = pcall(function() return projmeta:getProjectileMeta() end)
+						if not ok or not meta then return old(...) end
 
-                local projKey = (projmeta.projectile == 'glue_trap' or projmeta.projectile == 'glue_projectile') and 'gloop' or projmeta.projectile
-                if table.find(Blacklist.ListEnabled or {}, projKey) then
-                    return nextLaunch(...)
-                end
+						local lifetime = (worldmeta and meta.predictionLifetimeSec or meta.lifetimeSec or 3)
+						local gravity = (meta.gravitationalAcceleration or 196.2) * projmeta.gravityMultiplier
+						local projSpeed = (meta.launchVelocity or 100)
+						local offsetpos = pos + (projmeta.projectile == 'owl_projectile' and Vector3.zero or projmeta.fromPositionOffset)
+						local balloons = plr.Character:GetAttribute('InflatedBalloons')
+						local playerGravity = workspace.Gravity
 
-                local ok, meta = pcall(function() return projmeta:getProjectileMeta() end)
-                if not ok or not meta then return nextLaunch(...) end
+						if balloons and balloons > 0 then
+							playerGravity = workspace.Gravity * (1 - (balloons >= 4 and 1.2 or balloons >= 3 and 1 or 0.975))
+						end
 
-                local lifetime = (worldmeta and meta.predictionLifetimeSec or meta.lifetimeSec or 3)
-                local gravity = (meta.gravitationalAcceleration or 196.2) * projmeta.gravityMultiplier
-                local projSpeed = (meta.launchVelocity or 100)
-                local offsetpos = pos + (projmeta.projectile == 'owl_projectile' and Vector3.zero or projmeta.fromPositionOffset)
-                local balloons = plr.Character:GetAttribute('InflatedBalloons')
-                local playerGravity = workspace.Gravity
+						if plr.Character.PrimaryPart:FindFirstChild('rbxassetid://8200754399') then
+							playerGravity = 6
+						end
 
-                if balloons and balloons > 0 then
-                    playerGravity = workspace.Gravity * (1 - (balloons >= 4 and 1.2 or balloons >= 3 and 1 or 0.975))
-                end
+						if plr.Player and plr.Player:GetAttribute('IsOwlTarget') then
+							for _, owl in collectionService:GetTagged('Owl') do
+								if owl:GetAttribute('Target') == plr.Player.UserId and owl:GetAttribute('Status') == 2 then
+									playerGravity = 0
+								end
+							end
+						end
 
-                if plr.Character.PrimaryPart:FindFirstChild('rbxassetid://8200754399') then
-                    playerGravity = 6
-                end
+						local targetpos = getPosition(plr.Character) or plr[TargetPart.Value].Position
+						local bowOffset = projmeta.projectile == 'owl_projectile' and Vector3.zero or Vector3.new(
+							bedwars.BowConstantsTable.RelX,
+							bedwars.BowConstantsTable.RelY,
+							bedwars.BowConstantsTable.RelZ
+						)
+						local newlook = CFrame.new(offsetpos, targetpos) * CFrame.new(bowOffset)
+						local calc = prediction.SolveTrajectory(
+							newlook.p,
+							projSpeed * Prediction.Value,
+							gravity,
+							targetpos,
+							projmeta.projectile == 'telepearl' and Vector3.zero or plr.RootPart.Velocity,
+							playerGravity,
+							plr.HipHeight,
+							plr.Jumping and 42.6 or nil,
+							rayCheck
+						)
 
-                if plr.Player and plr.Player:GetAttribute('IsOwlTarget') then
-                    for _, owl in collectionService:GetTagged('Owl') do
-                        if owl:GetAttribute('Target') == plr.Player.UserId and owl:GetAttribute('Status') == 2 then
-                            playerGravity = 0
-                        end
-                    end
-                end
+						if calc then
+							targetinfo.Targets[plr] = tick() + 1
+							return {
+								initialVelocity = CFrame.new(newlook.Position, calc).LookVector * (projSpeed * (AutoCharge.Enabled and 1 or projmeta.velocityMultiplier)),
+								positionFrom = offsetpos,
+								deltaT = lifetime,
+								gravitationalAcceleration = gravity,
+								drawDurationSeconds = AutoCharge.Enabled and 5 or projmeta.drawDurationSeconds,
+							}
+						end
+					end
 
-                local targetpos = getPosition(plr.Character) or plr[TargetPart.Value].Position
-                local bowOffset = projmeta.projectile == 'owl_projectile' and Vector3.zero or Vector3.new(
-                    bedwars.BowConstantsTable.RelX,
-                    bedwars.BowConstantsTable.RelY,
-                    bedwars.BowConstantsTable.RelZ
-                )
-                local newlook = CFrame.new(offsetpos, targetpos) * CFrame.new(bowOffset)
-                local calc = prediction.SolveTrajectory(
-                    newlook.p,
-                    projSpeed * Prediction.Value,
-                    gravity,
-                    targetpos,
-                    projmeta.projectile == 'telepearl' and Vector3.zero or plr.RootPart.Velocity,
-                    playerGravity,
-                    plr.HipHeight,
-                    plr.Jumping and 42.6 or nil,
-                    rayCheck
-                )
+					return old(...)
+				end
+			else
+				if old then
+					bedwars.ProjectileController.calculateImportantLaunchValues = old
+					old = nil
+				end
+			end
+		end,
+		Tooltip = 'Silently adjusts your aim towards the enemy'
+	})
 
-                if calc then
-                    targetinfo.Targets[plr] = tick() + 1
-                    return {
-                        initialVelocity = CFrame.new(newlook.Position, calc).LookVector * (projSpeed * (AutoCharge.Enabled and 1 or projmeta.velocityMultiplier)),
-                        positionFrom = offsetpos,
-                        deltaT = lifetime,
-                        gravitationalAcceleration = gravity,
-                        drawDurationSeconds = AutoCharge.Enabled and 5 or projmeta.drawDurationSeconds,
-                    }
-                end
-            end
-
-            return nextLaunch(...)
-        end)
-    end
-
-    local ProjectileAimbot
-    ProjectileAimbot = vape.Categories.Blatant:CreateModule({
-        Name = 'Projectile Aimbot',
-        Disabled = not canDebug,
-        Function = function(callback)
-            if callback then
-                if hookThread then
-                    task.cancel(hookThread)
-                    hookThread = nil
-                end
-                hookThread = task.spawn(function()
-                    local attempts = 0
-                    while not (bedwars and bedwars.ProjectileLaunchHook) do
-                        task.wait(0.1)
-                        attempts = attempts + 1
-                        if attempts > 100 then return end -- 10s timeout
-                    end
-                    registerHook()
-                end)
-            else
-                if hookThread then
-                    task.cancel(hookThread)
-                    hookThread = nil
-                end
-                if launchHook then
-                    launchHook()
-                    launchHook = nil
-                end
-            end
-        end,
-        Tooltip = 'Silently adjusts your aim towards the enemy',
-    })
-
-    Targets = ProjectileAimbot:CreateTargets({
-        Players = true,
-        Walls = true,
-    })
-    TargetPart = ProjectileAimbot:CreateDropdown({
-        Name = 'Part',
-        List = {'RootPart', 'Head', 'Dynamic', 'Closest'},
-    })
-    local methods = {'Damage', 'Distance'}
-    for i in sortmethods do
-        if not table.find(methods, i) then
-            table.insert(methods, i)
-        end
-    end
-    Sort = ProjectileAimbot:CreateDropdown({
-        Name = 'Target Mode',
-        List = methods,
-        Default = 'Distance',
-    })
-    Prediction = ProjectileAimbot:CreateSlider({
-        Name = 'Prediction',
-        Min = 0.1,
-        Max = 2,
-        Default = 1,
-        Decimal = 10,
-    })
-    FOV = ProjectileAimbot:CreateSlider({
-        Name = 'FOV',
-        Min = 1,
-        Max = 1000,
-        Default = 1000,
-    })
-    AutoCharge = ProjectileAimbot:CreateToggle({
-        Name = 'Auto Charge',
-        Default = true,
-        Tooltip = 'Fully charges your bow, allowing your projectile to deal more damage',
-    })
-    OtherProjectiles = ProjectileAimbot:CreateToggle({
-        Name = 'Other Projectiles',
-        Default = true,
-        Function = function(call)
-            if Blacklist and Blacklist.Object then
-                Blacklist.Object.Visible = call
-            end
-        end,
-    })
-    Blacklist = ProjectileAimbot:CreateTextList({
-        Name = 'Blacklist',
-        Default = {'gloop', 'telepearl'},
-        Darker = true,
-        Placeholder = 'projectile',
-    })
+	Targets = ProjectileAimbot:CreateTargets({
+		Players = true,
+		Walls = true
+	})
+	TargetPart = ProjectileAimbot:CreateDropdown({
+		Name = 'Part',
+		List = {'RootPart', 'Head', 'Dynamic', 'Closest'},
+	})
+	local methods = {'Damage', 'Distance'}
+	for i in sortmethods do
+		if not table.find(methods, i) then
+			table.insert(methods, i)
+		end
+	end
+	Sort = ProjectileAimbot:CreateDropdown({
+		Name = 'Target Mode',
+		List = methods,
+		Default = 'Distance',
+	})
+	Prediction = ProjectileAimbot:CreateSlider({
+		Name = 'Prediction',
+		Min = 0.1,
+		Max = 2,
+		Default = 1,
+		Decimal = 10,
+	})
+	FOV = ProjectileAimbot:CreateSlider({
+		Name = 'FOV',
+		Min = 1,
+		Max = 1000,
+		Default = 1000,
+	})
+	AutoCharge = ProjectileAimbot:CreateToggle({
+		Name = 'Auto Charge',
+		Default = true,
+		Tooltip = 'Fully charges your bow, allowing your projectile to deal more damage',
+	})
+	OtherProjectiles = ProjectileAimbot:CreateToggle({
+		Name = 'Other Projectiles',
+		Default = true,
+		Function = function(call)
+			if Blacklist and Blacklist.Object then
+				Blacklist.Object.Visible = call
+			end
+		end,
+	})
+	Blacklist = ProjectileAimbot:CreateTextList({
+		Name = 'Blacklist',
+		Default = {'gloop', 'telepearl'},
+		Darker = true,
+		Placeholder = 'projectile',
+	})
 end)
 	
 run(function()
