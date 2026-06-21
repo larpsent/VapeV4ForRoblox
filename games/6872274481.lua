@@ -1226,6 +1226,8 @@ run(function()
 	local ShakeToggle
 	local ShakeAmount
 	local WorkWithProjectiles
+	local AimMode
+	local StrafeIncrease
 
 	local lockedTarget = nil
 	local lastValidTarget = nil
@@ -1269,7 +1271,7 @@ run(function()
 		return false
 	end
 
-	local BOW_NAMES = {'Bow', 'Crossbow'}
+	local BOW_NAMES = {'Bow', 'Crossbow', 'Longbow'}
 	local function isHoldingBowCrossbow()
 		local char = entitylib.character and entitylib.character.Instance
 		if not char then return false end
@@ -1281,31 +1283,33 @@ run(function()
 		return false
 	end
 
+	local function ease(t)
+		return t < 0.5 and 4 * t * t * t or 1 - math.pow(-2 * t + 2, 3) / 2
+	end
+
 	local function getSmoothedSpeed(speedVal, smoothVal, dt)
 		local rawSpeed = 0.01 * (1.35 ^ speedVal)
 		local smoothScale = math.max(1 - ((smoothVal - 1) / 9) * 0.88, 0.01)
 		return math.min(rawSpeed * smoothScale, 0.95)
 	end
 
+	local cache = {}
 	local function getClosestPartToCursor(character)
+		if not cache[character] then
+			cache[character] = character:GetChildren()
+		end
 		local mousePos = inputService:GetMouseLocation()
-		local mouseRay = gameCamera:ViewportPointToRay(mousePos.X, mousePos.Y, 0)
-		local bestAngle = math.huge
+		local bestDist = math.huge
 		local bestPart = nil
-		local partNames = {
-			'Head', 'UpperTorso', 'LowerTorso', 'HumanoidRootPart',
-			'LeftUpperArm', 'RightUpperArm', 'LeftLowerArm', 'RightLowerArm',
-			'LeftUpperLeg', 'RightUpperLeg', 'LeftLowerLeg', 'RightLowerLeg',
-			'LeftFoot', 'RightFoot', 'LeftHand', 'RightHand'
-		}
-		for _, partName in partNames do
-			local part = character:FindFirstChild(partName)
-			if part then
-				local dirToPart = (part.Position - mouseRay.Origin).Unit
-				local angle = math.acos(math.clamp(mouseRay.Direction:Dot(dirToPart), -1, 1))
-				if angle < bestAngle then
-					bestAngle = angle
-					bestPart = part
+		for _, v in cache[character] do
+			if v and v.Parent and v:IsA('BasePart') then
+				local position, vis = gameCamera:WorldToViewportPoint(v.Position)
+				if vis then
+					local mag = (mousePos - Vector2.new(position.X, position.Y)).Magnitude
+					if mag < bestDist then
+						bestDist = mag
+						bestPart = v
+					end
 				end
 			end
 		end
@@ -1334,6 +1338,43 @@ run(function()
 		return angle < math.rad(AngleSlider.Value / 2)
 	end
 
+	local started = 0
+
+	local aimfuncs = {
+		Simple = function(localcframe, aimPos, dt)
+			local strafeBoost = StrafeIncrease and StrafeIncrease.Enabled
+				and (inputService:IsKeyDown(Enum.KeyCode.A) or inputService:IsKeyDown(Enum.KeyCode.D))
+				and 10 or 0
+			local baseSpeed = AimSpeed.Value + strafeBoost
+			local lerpFactor
+			if SmoothnessToggle and SmoothnessToggle.Enabled then
+				local smoothed = getSmoothedSpeed(baseSpeed, Smoothness.Value, dt)
+				lerpFactor = math.min(smoothed * (dt * 60), 0.95)
+			else
+				lerpFactor = math.clamp(baseSpeed * dt, 0, 0.95)
+			end
+			return localcframe:Lerp(CFrame.lookAt(localcframe.p, aimPos), lerpFactor)
+		end,
+		Adaptive = function(localcframe, aimPos, dt)
+			local prog = ease(math.min(tick() - started, 1))
+			local strafeBoost = StrafeIncrease and StrafeIncrease.Enabled
+				and (inputService:IsKeyDown(Enum.KeyCode.A) or inputService:IsKeyDown(Enum.KeyCode.D))
+				and 10 or 5
+			local baseSpeed = (AimSpeed.Value * 0.1 * prog) + (1 - prog) + strafeBoost
+			local lerpFactor
+			if SmoothnessToggle and SmoothnessToggle.Enabled then
+				local smoothed = getSmoothedSpeed(baseSpeed, Smoothness.Value, dt)
+				lerpFactor = math.min(smoothed * (dt * 60), 0.95)
+			else
+				lerpFactor = math.clamp(baseSpeed * dt, 0, 0.95)
+			end
+			return localcframe:Lerp(CFrame.lookAt(localcframe.p, aimPos), lerpFactor)
+		end
+	}
+
+	local AimMode_Dropdown
+	local Mode
+
 	AimAssist = vape.Categories.Combat:CreateModule({
 		Name = 'AimAssist',
 		Function = function(callback)
@@ -1342,8 +1383,10 @@ run(function()
 				lastValidTarget = nil
 				lastValidTime = 0
 				shakeTime = 0
-				AimAssist:Clean(runService.Heartbeat:Connect(function(dt)
+				started = 0
+				cache = {}
 
+				AimAssist:Clean(runService.Heartbeat:Connect(function(dt)
 					if not entitylib.isAlive or not entitylib.character or not entitylib.character.RootPart then
 						lockedTarget = nil
 						return
@@ -1406,6 +1449,9 @@ run(function()
 							})
 
 							if found then
+								if found ~= lastValidTarget then
+									started = tick()
+								end
 								lastValidTarget = found
 								lastValidTime = tick()
 								ent = found
@@ -1453,6 +1499,7 @@ run(function()
 						aimPosition = ent.RootPart.Position
 					end
 
+					-- Shake
 					if ShakeToggle and ShakeToggle.Enabled and ShakeAmount.Value > 0 then
 						shakeTime = shakeTime + dt
 						local intensity = ShakeAmount.Value * 0.045
@@ -1466,17 +1513,27 @@ run(function()
 						aimPosition = aimPosition + Vector3.new(sx, sy, sz)
 					end
 
-					local targetCFrame = CFrame.lookAt(gameCamera.CFrame.p, aimPosition)
-					if SmoothnessToggle and SmoothnessToggle.Enabled then
-						local speed = getSmoothedSpeed(AimSpeed.Value, Smoothness.Value, dt)
-						gameCamera.CFrame = gameCamera.CFrame:Lerp(targetCFrame, math.min(speed * (dt * 60), 0.95))
-					else
-						gameCamera.CFrame = gameCamera.CFrame:Lerp(targetCFrame, math.clamp(AimSpeed.Value * dt, 0, 0.95))
+					local modeFunc = aimfuncs[Mode.Value] or aimfuncs.Simple
+					local perspective = AimMode_Dropdown.Value
+
+					if perspective == 'First Person' or (perspective == 'Dynamic' and inFirstPerson) then
+						gameCamera.CFrame = modeFunc(gameCamera.CFrame, aimPosition, dt)
+					elseif perspective == 'Third Person' or (perspective == 'Dynamic' and not inFirstPerson) then
+						local root = entitylib.character.RootPart
+						local newCFrame = modeFunc(root.CFrame, aimPosition, dt)
+						entitylib.character.Humanoid.AutoRotate = false
+						root.CFrame = CFrame.lookAlong(root.Position, newCFrame.LookVector * Vector3.new(1, 0, 1))
+					elseif perspective == 'Mouse' then
+						local cframe = modeFunc(gameCamera.CFrame, aimPosition, dt)
+						local viewport = gameCamera:WorldToViewportPoint(cframe.Position)
+						local pos = (Vector2.new(viewport.X, viewport.Y) - inputService:GetMouseLocation()) * (AimSpeed.Value / 15)
+						mousemoverel(pos.X, pos.Y)
 					end
 				end))
 			else
 				lockedTarget = nil
 				lastValidTarget = nil
+				cache = {}
 			end
 		end,
 		Tooltip = 'Aim assist with smooth target tracking'
@@ -1493,6 +1550,20 @@ run(function()
 			table.insert(methods, i)
 		end
 	end
+
+	AimMode_Dropdown = AimAssist:CreateDropdown({
+		Name = 'Aim Perspective',
+		List = {'First Person', 'Third Person', 'Mouse', 'Dynamic'},
+		Default = 'First Person',
+		Tooltip = 'First Person - Camera aim\nThird Person - Rotates character\nMouse - Moves mouse\nDynamic - Auto switches'
+	})
+
+	Mode = AimAssist:CreateDropdown({
+		Name = 'Aim Mode',
+		List = {'Simple', 'Adaptive'},
+		Default = 'Simple',
+		Tooltip = 'Simple - Smooth tracking\nAdaptive - Eased tracking with adaptive speed'
+	})
 
 	Sort = AimAssist:CreateDropdown({
 		Name = 'Target Mode',
@@ -1560,7 +1631,13 @@ run(function()
 	PriorityMode = AimAssist:CreateToggle({
 		Name = 'Priority Mode',
 		Default = false,
-		Tooltip = 'Locks onto one target. Ignores closer targets until current is lost.'
+		Tooltip = 'Locks onto one target until lost'
+	})
+
+	StrafeIncrease = AimAssist:CreateToggle({
+		Name = 'Strafe Increase',
+		Default = false,
+		Tooltip = 'Boosts aim speed while strafing'
 	})
 
 	ClickAim = AimAssist:CreateToggle({
@@ -1571,7 +1648,7 @@ run(function()
 
 	KillauraTarget = AimAssist:CreateToggle({
 		Name = 'Use Killaura Target',
-		Tooltip = 'Follow Killaura target only, bypasses all distance and wall filters'
+		Tooltip = 'Follow Killaura target only'
 	})
 
 	ShakeToggle = AimAssist:CreateToggle({
@@ -11468,5 +11545,102 @@ run(function()
     	Suffix = function(val)
     		return val <= 1 and 'stud' or 'studs'
     	end
+    })
+end)
+
+run(function()
+    local AutoLasso
+    local Targets
+    local Range
+    local Angle
+    
+    local projectileRemote, lastshot = {InvokeServer = function() end}, tick()
+    task.spawn(function()
+        projectileRemote = bedwars.Client:Get(remotes.FireProjectile).instance
+    end)
+    
+    local rayCheck = RaycastParams.new()
+    
+    AutoLasso = vape.Categories.Kits:CreateModule({
+        Name = 'Auto Lasso',
+        Function = function(callback)
+            if callback then
+                repeat
+                    if entitylib.isAlive and tick() > lastshot and (not Limit.Enabled or store.hand.tool and store.hand.tool.Name == 'lasso') then
+                        local lasso = getItem('lasso')
+                        if lasso then
+                            local ent = entitylib.EntityPosition({
+                                Range = Range.Value,
+                                Part = 'RootPart',
+                                Wallcheck = Targets.Walls.Enabled,
+                                Players = Targets.Players.Enabled,
+                                NPCs = Targets.NPCs.Enabled,
+                                Sort = sortmethods.Distance
+                            })
+    
+                            if ent then
+                                local selfpos = entitylib.character.RootPart.Position
+                                local localfacing = gameCamera.CFrame.LookVector * Vector3.new(1, 0, 1)
+                                local delta = (ent.RootPart.Position - selfpos) * Vector3.new(1, 0, 1)
+                                if delta.Magnitude > 0.001 and math.acos(math.clamp(localfacing:Dot(delta.Unit), -1, 1)) <= (math.rad(Angle.Value) / 2) then
+                                    local calc = prediction.SolveTrajectory(selfpos, 200, 135, ent.RootPart.Position, ent.RootPart.Velocity, workspace.Gravity, ent.Humanoid.HipHeight or 2, nil, rayCheck)
+                                    if calc then
+                                        local old = store.inventory.hotbarSlot
+                                        local new = getHotbar(lasso.tool)
+                                        if new then
+                                            switchItem(lasso.tool)
+                                            hotbarSwitch(new)
+                                        end
+                                        
+                                        local res = projectileRemote:InvokeServer(
+                                            lasso.tool,
+                                            'lasso',
+                                            'lasso',
+                                            selfpos, 
+                                            selfpos, 
+                                            CFrame.lookAt(selfpos, calc).LookVector * 200,
+                                            httpService:GenerateGUID(true),
+                                            {
+                                                drawDurationSeconds = 1, 
+                                                shotId = httpService:GenerateGUID(false)
+                                            },
+                                            workspace:GetServerTimeNow() - 0.045
+                                        )
+                                        if res then
+                                            lastshot = tick() + 10.5 
+                                        end
+                                        hotbarSwitch(old)
+                                        task.wait(0.1)
+                                    end
+                                end
+                            end
+                        end
+                    end
+                    task.wait(0.05)
+                until not AutoLasso.Enabled
+            end
+        end
+    })
+    
+    Targets = AutoLasso:CreateTargets({Players = true})
+    Range = AutoLasso:CreateSlider({
+        Name = 'Range',
+        Min = 1,
+        Max = 60,
+        Default = 60,
+        Suffix = function(val)
+            return val <= 1 and 'stud' or 'studs'
+        end
+    })
+    Angle = AutoLasso:CreateSlider({
+        Name = 'Max angle',
+        Min = 1,
+        Max = 360,
+        Default = 120
+    })
+    Limit = AutoLasso:CreateToggle({
+        Name = 'Limit to items',
+        Tooltip = 'Only uses lasso if you\'re holding one.',
+        Default = false
     })
 end)
