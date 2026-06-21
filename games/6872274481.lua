@@ -3893,7 +3893,8 @@ run(function()
     	Function = function(callback)
     		if callback then
     			oldd = bedwars.BlockKickerKitController.getKickBlockProjectileOriginPosition
-    			launchHook = bedwars.ProjectileLaunchHook:Add('ProjectileAimbot', 100, function(nextLaunch, ...)
+    			if not bedwars.ProjectileLaunchHook then return end
+launchHook = bedwars.ProjectileLaunchHook:Add('ProjectileAimbot', 100, function(nextLaunch, ...)
     				local self, projmeta, worldmeta, origin, shootpos = ...
     				local plr = entitylib.EntityMouse({
     					Part = 'RootPart',
