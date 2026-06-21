@@ -2746,7 +2746,7 @@ run(function()
             if not entitylib.isAlive then return false end
             if (lplr.Character:GetAttribute('StunnedUntilTime') or 0) > workspace:GetServerTimeNow() then return false end
             if lplr.Character:FindFirstChild('elk') then return false end
-            if bedwars.StatusEffectUtil:isActive(lplr.Character, 'frozen') then return false end
+            --if bedwars.StatusEffectUtil:isActive(lplr.Character, 'frozen') then return false end
         end
     
         if GUI.Enabled then
