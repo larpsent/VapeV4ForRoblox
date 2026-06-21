@@ -3902,6 +3902,7 @@ run(function()
 						Sort = sortmethods[Sort.Value or 'Distance'],
 						Origin = entitylib.isAlive and (shootpos or entitylib.character.RootPart.Position) or Vector3.zero
 					})
+					print("target found:", plr)
 
 					if plr then
 						local pos = shootpos or self:getLaunchPosition(origin)
