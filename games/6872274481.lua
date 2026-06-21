@@ -1243,7 +1243,7 @@ run(function()
 
 	local function isEnemy(ent)
 		local plr = playersService:GetPlayerFromCharacter(ent.Character)
-		if not plr then return true end -- treat NPCs as valid targets
+		if not plr then return true end
 		local localPlr = playersService.LocalPlayer
 		if not localPlr.Team or not plr.Team then return true end
 		return plr.Team ~= localPlr.Team
@@ -1269,7 +1269,7 @@ run(function()
 		return false
 	end
 
-	local BOW_NAMES = {'Bow', 'Crossbow', 'Longbow'}
+	local BOW_NAMES = {'Bow', 'Crossbow'}
 	local function isHoldingBowCrossbow()
 		local char = entitylib.character and entitylib.character.Instance
 		if not char then return false end
@@ -2918,7 +2918,7 @@ run(function()
                                                     cameraPosition = {value = pos},
                                                     cursorDirection = {value = dir}
                                                 },
-                                                targetPosition = {value = actualRoot.Position + vape.Libraries.calculatePosition(selfpos, actualRoot)},
+                                                targetPosition = {value = actualRoot.Position},
                                                 selfPosition = {value = pos}
                                             }
                                         })
