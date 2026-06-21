@@ -1209,7 +1209,7 @@ for _, v in {'AntiRagdoll', 'TriggerBot', 'SilentAim', 'AutoRejoin', 'Rejoin', '
 	vape:Remove(v)
 end
 run(function()
-local AimAssist
+	local AimAssist
 	local Targets
 	local Sort
 	local AimSpeed
@@ -1233,6 +1233,53 @@ local AimAssist
 	local GRACE_PERIOD = 0.15
 	local rng = Random.new()
 	local shakeTime = 0
+
+	local function isFirstPerson()
+		local char = entitylib.character
+		if not char or not char.Head then return false end
+		local dist = (gameCamera.CFrame.Position - char.Head.Position).Magnitude
+		return dist < 1.5
+	end
+
+	local function isEnemy(ent)
+		local plr = playersService:GetPlayerFromCharacter(ent.Character)
+		if not plr then return true end -- treat NPCs as valid targets
+		local localPlr = playersService.LocalPlayer
+		if not localPlr.Team or not plr.Team then return true end
+		return plr.Team ~= localPlr.Team
+	end
+
+	local SHOP_GUI_NAMES = {'Shop', 'ShopGui', 'ShopFrame', 'ItemShop'}
+	local function isGUIOpen()
+		local playerGui = playersService.LocalPlayer:FindFirstChild('PlayerGui')
+		if not playerGui then return false end
+		for _, name in SHOP_GUI_NAMES do
+			local gui = playerGui:FindFirstChild(name, true)
+			if gui and (gui:IsA('ScreenGui') or gui:IsA('Frame')) and gui.Enabled ~= false then
+				if gui:IsA('Frame') then
+					if gui.Visible then return true end
+				else
+					if gui.Enabled then
+						local frame = gui:FindFirstChildWhichIsA('Frame')
+						if not frame or frame.Visible then return true end
+					end
+				end
+			end
+		end
+		return false
+	end
+
+	local BOW_NAMES = {'Bow', 'Crossbow', 'Longbow'}
+	local function isHoldingBowCrossbow()
+		local char = entitylib.character and entitylib.character.Instance
+		if not char then return false end
+		local tool = char:FindFirstChildOfClass('Tool')
+		if not tool then return false end
+		for _, name in BOW_NAMES do
+			if tool.Name:find(name) then return true end
+		end
+		return false
+	end
 
 	local function getSmoothedSpeed(speedVal, smoothVal, dt)
 		local rawSpeed = 0.01 * (1.35 ^ speedVal)
