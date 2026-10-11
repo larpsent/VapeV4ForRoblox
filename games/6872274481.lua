@@ -706,7 +706,15 @@ run(function()
 			}
 		end,
 		HudAliveCount = require(lplr.PlayerScripts.TS.controllers.global['top-bar'].ui.game['hud-alive-player-counts']).HudAlivePlayerCounts,
-		ItemMeta = debug.getupvalue(ItemMetaModule.getItemMeta, 1) or ItemMetaModule.items,
+		ItemMeta = (function()
+    for i = 1, 20 do
+        local ok, val = pcall(debug.getupvalue, ItemMetaModule.getItemMeta, i)
+        if ok and type(val) == "table" and next(val) ~= nil then
+            return val
+        end
+    end
+    return ItemMetaModule.items
+end)(),
 		KillEffectMeta = require(replicatedStorage.TS.locker['kill-effect']['kill-effect-meta']).KillEffectMeta,
 		KillFeedController = Flamework.resolveDependency('client/controllers/game/kill-feed/kill-feed-controller@KillFeedController'),
 		Knit = Knit,
@@ -723,7 +731,15 @@ run(function()
 		SoundList = require(replicatedStorage.TS.sound['game-sound']).GameSound,
 		SoundManager = require(replicatedStorage['rbxts_include']['node_modules']['@easy-games']['game-core'].out).SoundManager,
 		Store = require(lplr.PlayerScripts.TS.ui.store).ClientStore,
-		TeamUpgradeMeta = debug.getupvalue(TeamUpgradeModule.getTeamUpgradeMetaForQueue, 2) or (CheatEngineLib and CheatEngineLib.TeamUpgradeMeta),
+		TeamUpgradeMeta = (function()
+    for i = 1, 20 do
+        local ok, val = pcall(debug.getupvalue, TeamUpgradeModule.getTeamUpgradeMetaForQueue, i)
+        if ok and type(val) == "table" and next(val) ~= nil then
+            return val
+        end
+    end
+    return CheatEngineLib and CheatEngineLib.TeamUpgradeMeta
+end)(),
 		UILayers = require(replicatedStorage['rbxts_include']['node_modules']['@easy-games']['game-core'].out).UILayers,
 		VisualizerUtils = require(lplr.PlayerScripts.TS.lib.visualizer['visualizer-utils']).VisualizerUtils,
 		WeldTable = require(replicatedStorage.TS.util['weld-util']).WeldUtil,
