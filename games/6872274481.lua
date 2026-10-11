@@ -1805,7 +1805,7 @@ run(function()
             ConfirmedHits = 0
         end
     end)
-End)
+end)
 	
 run(function()
     local SilentAura
