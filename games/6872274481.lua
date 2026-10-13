@@ -3587,6 +3587,51 @@ run(function()
 	end)
 end)
 
+Run(function()
+	local SwordTiming = vape.Libraries.swordtiming
+	local HitregAdjuster
+	local Hitreg
+	local SwordSpeed, SwingSpeed, SwingRestore
+	local HitBudget: number = 60 / bedwars.Handler:Get("SwordHit"):GetRateLimit()
+	
+	HitregAdjuster = vape.Categories.Combat:CreateModule({
+	    Name = "HitregAdjuster",
+	    Function = function(Callback: boolean)
+	        if Callback then
+	            SwingSpeed = bedwars.SyncEvents.SwordSwing:setPriority(150):connect(function(Event)
+	                SwordSpeed = Event.attackSpeed
+	                local Fury: number = bedwars.StatusEffectUtil:isActive(LocalPlayer.Character, "fury_potion") and 1 - (bedwars.BlackMarketeerBalance.FURY_POTION_ATTACK_SPEED_MULTIPLIER - 1) or 1
+	                local BaseSpeed: number = SwordSpeed / Fury
+	                local Meta = bedwars.ItemMeta[Event.swordType]
+	                local MetaSpeed: number? = Meta and Meta.sword and Meta.sword.attackSpeed
+	                if MetaSpeed and math.abs(BaseSpeed - MetaSpeed) < 0.000001 then BaseSpeed = MetaSpeed end
+	                local Spacing, _, _, Cooldown = SwordTiming.Calculate(BaseSpeed, Fury, Hitreg.Value >= 35, HitBudget, Hitreg.Value)
+	                Event.attackSpeed = math.max(Spacing, Cooldown)
+	            end)
+	            SwingRestore = bedwars.SyncEvents.SwordSwing:setPriority(300):connect(function(Event)
+	                Event.attackSpeed = SwordSpeed
+	            end)
+	            HitregAdjuster:Clean(function()
+	                SwingSpeed:Destroy()
+	                SwingRestore:Destroy()
+	            end)
+	        end
+	    end,
+	    Tooltip = "Swaps the games attack cooldown for a hit count of your own"
+	})
+	
+	Hitreg = HitregAdjuster:CreateSlider({
+	    Name = "Hitreg",
+	    Min = 1,
+	    Max = 36,
+	    Default = 35,
+	    Suffix = function(Val: number)
+	        return Val == 1 and "hit / 10s" or "hits / 10s"
+	    end,
+	    Tooltip = "Spacing your manual and autoclicker hits fire at, 35 is the killaura spacing (fury potion still speeds it up)"
+	})
+end)
+
 run(function()
 	local KnockbackDisplace
 	local KBDirection
@@ -4617,426 +4662,233 @@ run(function()
 	local SilentAim
 	local Targets
 	local TargetPart
-	local SortMethod
-	local Range
+	local Sort
+	local Prediction
 	local FOV
-	local SAFOVCircle
-	local RandomHeadPercent
-	local RandomTorsoPercent
+	local HitChance
+	local HeadshotChance
 	local OtherProjectiles
 	local Blacklist
-	local AutoCharge
-	local skidChargePercent
-
-	local rayCheck = RaycastParams.new()
-	rayCheck.FilterType = Enum.RaycastFilterType.Include
-	rayCheck.FilterDescendantsInstances = {workspace:FindFirstChild('Map')}
-
-	local namecall
-	local namecallHooked = false
-	local lockedRandomPart
-	local _saVelHistory = {}
-	local _saVelStamp = {}
-	local fovConn
-
-	local function getMousePosition()
-		if inputService.TouchEnabled then
-			return gameCamera.ViewportSize / 2
-		end
-		return inputService:GetMouseLocation()
+	
+	local RayCheck: RaycastParams = RaycastParams.new()
+	RayCheck.FilterType = Enum.RaycastFilterType.Include
+	
+	local OldNamecall
+	local LastWarn: number = 0
+	local RandomGenerator: Random = Random.new()
+	
+	local function SolveSilent(Arguments): Vector3?
+	    local Origin, Velocity, ProjectileType = Arguments[4], Arguments[6], Arguments[3]
+	    if typeof(Origin) ~= "Vector3" or typeof(Velocity) ~= "Vector3" or type(ProjectileType) ~= "string" then
+	        return
+	    end
+	
+	    if (not OtherProjectiles.Enabled) and not ProjectileType:find("arrow") then
+	        return
+	    end
+	
+	    if table.find(Blacklist.ListEnabled or {}, ((ProjectileType == "glue_trap" or ProjectileType == "glue_projectile") and "gloop" or ProjectileType)) then
+	        return
+	    end
+	
+	    local ProjectileMeta = bedwars.ProjectileMeta[ProjectileType]
+	    if not ProjectileMeta then
+	        return
+	    end
+	
+	    local Speed: number = Velocity.Magnitude
+	    if Speed <= 0 then
+	        return
+	    end
+	
+	    if RandomGenerator:NextNumber(0, 100) > HitChance:GetRandomValue() then
+	        return
+	    end
+	
+	    local Map: Instance? = workspace:FindFirstChild("Map")
+	    if Map ~= RayCheck.FilterDescendantsInstances[1] then
+	        RayCheck.FilterDescendantsInstances = Map and {Map} or {}
+	    end
+	    local Gravity: number = ProjectileMeta.gravitationalAcceleration or 196.2
+	
+	    local Target = Entity.EntityMouse({
+	        Part = "RootPart",
+	        Range = FOV.Value,
+	        Players = Targets.Players.Enabled,
+	        NPCs = Targets.NPCs.Enabled,
+	        Priority = Targets.Priority.Value,
+	        Wallcheck = Targets.Walls.Enabled,
+	        Sort = SortMethods[Sort.Value or "Distance"],
+	        MouseOrigin = Camera.ViewportSize / 2,
+	        Origin = Origin
+	    })
+	    if not Target then
+	        return
+	    end
+	
+	    local PartName: string = RandomGenerator:NextNumber(0, 100) < HeadshotChance:GetRandomValue() and "Head" or TargetPart.Value
+	    local SelectedPart = GetTargetPart(Target, PartName)
+	    local TargetPosition: Vector3?
+	    if PartName == "Closest" then
+	        local Center, ClosestDistance = Camera.ViewportSize / 2, 9e9
+	        for _, v: Instance in Target.Character:GetChildren() do
+	            if v:IsA("BasePart") then
+	                local ScreenPosition, Visible = Camera:WorldToViewportPoint(v.Position)
+	                if Visible then
+	                    local PartDistance: number = (Center - Vector2.new(ScreenPosition.X, ScreenPosition.Y)).Magnitude
+	                    if PartDistance < ClosestDistance then
+	                        ClosestDistance, TargetPosition = PartDistance, v.Position
+	                    end
+	                end
+	            end
+	        end
+	        TargetPosition = TargetPosition or Target.Character.PrimaryPart and Target.Character.PrimaryPart.Position
+	    elseif PartName == "Dynamic" then
+	        local Tool = Store.hand.tool
+	        if IsHeadshotProjectile(Tool and Tool.Name) and Target.Character:FindFirstChild("Head") then
+	            TargetPosition = Target.Character.Head.Position
+	        else
+	            TargetPosition = Target.Character.PrimaryPart and Target.Character.PrimaryPart.Position
+	        end
+	    end
+	
+	    TargetPosition = TargetPosition or SelectedPart and SelectedPart.Position
+	    if not TargetPosition then
+	        return
+	    end
+	    local PlayerGravity: number = workspace.Gravity
+	    local Balloons = Target.Character:GetAttribute("InflatedBalloons")
+	    if Balloons and Balloons > 0 then
+	        PlayerGravity = workspace.Gravity * (1 - (Balloons >= 4 and 1.2 or Balloons >= 3 and 1 or 0.975))
+	    end
+	
+	    if Target.Character.PrimaryPart and Target.Character.PrimaryPart:FindFirstChild("rbxassetid://8200754399") then
+	        PlayerGravity = 6
+	    end
+	
+	    if Target.Player and Target.Player:GetAttribute("IsOwlTarget") then
+	        for _, v: Instance in CollectionService:GetTagged("Owl") do
+	            if v:GetAttribute("Target") == Target.Player.UserId and v:GetAttribute("Status") == 2 then
+	                PlayerGravity = 0
+	            end
+	        end
+	    end
+	
+	    local IsPearl: boolean = ProjectileType == "telepearl"
+	    local TargetVelocity: Vector3 = IsPearl and Vector3.zero or Target.RootPart.AssemblyLinearVelocity
+	    local TargetAirborne: boolean = not IsPearl and Target.Humanoid.FloorMaterial == Enum.Material.Air or math.abs(TargetVelocity.Y) > 0.01
+	    local AimPosition, _, TravelTime = PredictionLib.SolveTrajectory(Origin, Speed * Prediction.Value, Gravity, TargetPosition, TargetVelocity, PlayerGravity, Target.HipHeight, Target.Jumping and 42.6 or nil, RayCheck, TargetAirborne, Target.RootPart.Position, Target.RootPart, nil, true)
+	    if not AimPosition or not TravelTime or TravelTime > (ProjectileMeta.lifetimeSec or 3) then
+	        return
+	    end
+	
+	    TargetInfo.Targets[Target] = tick() + 1
+	    Store.hitchance.SilentAim = {Value = GetHitChance(Target, TravelTime), Clock = tick()}
+	    return CFrame.lookAt(Origin, AimPosition).LookVector * Speed
 	end
-
-	local function getClosestPart(char, mousePos)
-		local magnitude, part = 9e9, nil
-		for _, v in char:GetChildren() do
-			if v:IsA('BasePart') then
-				local position, vis = gameCamera:WorldToViewportPoint(v.Position)
-				if vis then
-					local mag = (mousePos - Vector2.new(position.X, position.Y)).Magnitude
-					if mag < magnitude then
-						magnitude = mag
-						part = v
-					end
-				end
-			end
-		end
-		return part
-	end
-
-	local function pickRandomPart(char)
-		local roll = math.random(1, 100)
-		local head = char:FindFirstChild('Head')
-		local torso = char:FindFirstChild('HumanoidRootPart') or char.PrimaryPart
-		if head and roll <= RandomHeadPercent.Value then
-			return head
-		elseif torso and roll <= (RandomHeadPercent.Value + RandomTorsoPercent.Value) then
-			return torso
-		end
-		return torso or head
-	end
-
-	local function getTargetPart(plr)
-		local val = TargetPart.Value
-		if val == 'Dynamic' then
-			local tool = store.hand and store.hand.tool
-			local itemType = tostring(tool and tool.Name or ''):lower()
-			if itemType:find('headhunter') and plr.Character and plr.Character:FindFirstChild('Head') then
-				return plr.Character.Head
-			end
-			return plr.RootPart
-		elseif val == 'Head' then
-			return (plr.Character and plr.Character:FindFirstChild('Head')) or plr.RootPart
-		elseif val == 'Closest' then
-			return (plr.Character and getClosestPart(plr.Character, getMousePosition())) or plr.RootPart
-		elseif val == 'Randomize' then
-			if lockedRandomPart and lockedRandomPart.Parent ~= plr.Character then
-				lockedRandomPart = nil
-			end
-			if plr.Character and (not lockedRandomPart or not lockedRandomPart.Parent) then
-				lockedRandomPart = pickRandomPart(plr.Character)
-			end
-			return lockedRandomPart or plr.RootPart
-		end
-		return plr.RootPart
-	end
-
-	local function isBlacklisted(projType)
-		local key = (projType == 'glue_trap' or projType == 'glue_projectile') and 'gloop' or projType
-		if Blacklist and table.find(Blacklist.ListEnabled or Blacklist.Value or {}, key) then
-			return true
-		end
-		return false
-	end
-
-	local fovDrawing
-	local function isHoldingProjectile()
-		local tool = store.hand and store.hand.tool
-		local itemType = tool and tool.Name or ''
-		local itemMeta = bedwars.ItemMeta and bedwars.ItemMeta[itemType]
-		if not (itemMeta and itemMeta.projectileSource) then return false end
-		local src = itemMeta.projectileSource
-		local isArrow = src.ammoItemTypes and table.find(src.ammoItemTypes, 'arrow')
-		local isHeadhunter = itemType:find('headhunter')
-		if isArrow or isHeadhunter then return true end
-		if OtherProjectiles and OtherProjectiles.Enabled then
-			local projectileType = src.projectileType and (type(src.projectileType) == 'function' and src.projectileType('arrow') or src.projectileType) or ''
-			for _, black in ipairs(Blacklist and Blacklist.ListEnabled or {}) do
-				if tostring(projectileType):find(black) then return false end
-			end
-			return true
-		end
-		return false
-	end
-	local function runFOVCircle(state)
-		if fovConn then fovConn:Disconnect() fovConn = nil end
-		if fovDrawing then fovDrawing:Destroy() fovDrawing = nil end
-		if not state then return end
-		fovDrawing = Instance.new('Frame')
-		fovDrawing.Name = 'SAFOVCircle'
-		fovDrawing.BackgroundTransparency = 1
-		fovDrawing.AnchorPoint = Vector2.new(0.5, 0.5)
-		fovDrawing.Visible = false
-		local stroke = Instance.new('UIStroke')
-		stroke.Thickness = 1
-		stroke.Color = Color3.fromRGB(255, 255, 255)
-		stroke.Parent = fovDrawing
-		local corner = Instance.new('UICorner')
-		corner.CornerRadius = UDim.new(1, 0)
-		corner.Parent = fovDrawing
-		fovDrawing.Parent = vape.gui
-		fovConn = runService.RenderStepped:Connect(function()
-			if not fovDrawing or not FOV or not FOV.Value then return end
-			local shouldShow = SilentAim and SilentAim.Enabled and SAFOVCircle and SAFOVCircle.Enabled and isHoldingProjectile()
-			fovDrawing.Visible = shouldShow
-			if shouldShow then
-				local mousePos
-				if inputService.TouchEnabled then
-					mousePos = gameCamera.ViewportSize / 2
-				else
-					local mp = inputService:GetMouseLocation()
-					mousePos = Vector2.new(mp.X, mp.Y)
-				end
-				fovDrawing.Position = UDim2.fromOffset(mousePos.X, mousePos.Y)
-				fovDrawing.Size = UDim2.fromOffset(FOV.Value * 2, FOV.Value * 2)
-			end
-		end)
-	end
-
-	local function solveSilent(args)
-		local origin, velocity, projType = args[4], args[6], args[3]
-		if typeof(origin) ~= 'Vector3' then
-			origin = args[5]
-		end
-		if typeof(origin) ~= 'Vector3' or typeof(velocity) ~= 'Vector3' or type(projType) ~= 'string' then
-			return
-		end
-
-		if (not OtherProjectiles.Enabled) and not projType:find('arrow') then
-			return
-		end
-		if isBlacklisted(projType) then return end
-
-		local meta = bedwars.ProjectileMeta[projType]
-		if not meta then return end
-
-		local projSpeed = velocity.Magnitude
-		if projSpeed <= 0 then return end
-
-		if AutoCharge and AutoCharge.Enabled then
-			local sourceTool = args[1]
-			local itemMeta = sourceTool and bedwars.ItemMeta[sourceTool.Name]
-			local sourceMeta = itemMeta and itemMeta.projectileSource
-			local overrides
-
-			if meta.getProjectileOverridesFunction then
-				pcall(function()
-					overrides = meta.getProjectileOverridesFunction(lplr)
-				end)
-			end
-
-			overrides = type(overrides) == 'table' and overrides or {}
-
-			local baseSpeed = tonumber(overrides.launchVelocityOverride) or tonumber(meta.launchVelocity) or projSpeed
-			local minScalar = tonumber(sourceMeta and sourceMeta.minStrengthScalar) or 1
-			local chargeRatio = math.clamp(skidChargePercent.Value / 100, 0, 1)
-
-			projSpeed = baseSpeed * (minScalar + (1 - minScalar) * chargeRatio)
-		end
-
-		local gravity = tonumber(meta.gravitationalAcceleration)
-		if gravity == nil then gravity = 196.2 end
-		if gravity < 1 then gravity = 0 end
-
-		local plr = entitylib.EntityMouse({
-			Part = 'RootPart',
-			Range = FOV.Value,
-			Players = Targets.Players.Enabled,
-			NPCs = (Targets.NPCs and Targets.NPCs.Enabled) or false,
-			Wallcheck = Targets.Walls.Enabled,
-			Sort = sortmethods[SortMethod.Value or 'Cursor'],
-			Origin = origin,
-		})
-		if not plr then return end
-
-		local targetBodyPart = getTargetPart(plr)
-		if not targetBodyPart then return end
-
-		local dist = (targetBodyPart.Position - origin).Magnitude
-		if dist > Range.Value then return end
-
-		local playerGravity = workspace.Gravity
-		local balloons = plr.Character and plr.Character:GetAttribute('InflatedBalloons')
-		if balloons and balloons > 0 then
-			playerGravity = workspace.Gravity * (1 - (balloons >= 4 and 1.2 or balloons >= 3 and 1 or 0.975))
-		end
-		if plr.Character and plr.Character.PrimaryPart and plr.Character.PrimaryPart:FindFirstChild('rbxassetid://8200754399') then
-			playerGravity = 6
-		end
-
-		local pearl = projType == 'telepearl'
-		local rawVel = pearl and Vector3.zero or (plr.RootPart.AssemblyLinearVelocity or plr.RootPart.Velocity or Vector3.zero)
-		local _velKey = tostring(plr)
-		local _velNow = tick()
-		if not _saVelHistory[_velKey] or (_velNow - (_saVelStamp[_velKey] or 0)) > 0.15 then
-			_saVelHistory[_velKey] = rawVel
-		else
-			_saVelHistory[_velKey] = _saVelHistory[_velKey]:Lerp(rawVel, 0.35)
-		end
-		_saVelStamp[_velKey] = _velNow
-
-		local aimTarget = targetBodyPart.Position
-		if targetBodyPart.Name ~= 'Head' and plr.RootPart then
-			local rootY = plr.RootPart.Position.Y
-			aimTarget = Vector3.new(aimTarget.X, math.clamp(aimTarget.Y, rootY - 1, rootY + 1), aimTarget.Z)
-		end
-		local _map = workspace:FindFirstChild('Map')
-		if _map then rayCheck.FilterDescendantsInstances = {_map} end
-		local lifetime = tonumber(meta.predictionLifetimeSec) or tonumber(meta.lifetimeSec) or (projSpeed > 0 and math.min(3, 120 / projSpeed) or 3)
-		local spawnPos = origin
-		local calc, _, flightTime = prediction.SolveTrajectory(
-			spawnPos, projSpeed, gravity,
-			aimTarget, _saVelHistory[_velKey] or rawVel,
-			playerGravity, plr.HipHeight,
-			plr.Jumping and 42.6 or nil,
-			rayCheck,
-			(plr.Humanoid and plr.Humanoid.FloorMaterial == Enum.Material.Air) or math.abs(rawVel.Y) > 0.01,
-			plr.RootPart.Position,
-			plr.RootPart,
-			nil,
-			true
-		)
-
-		if calc then
-			local bow = bedwars.BowConstantsTable or {}
-			local spawn = prediction.GetSpawnPosition(spawnPos, calc, bow.RelX or 0.8, bow.RelY or -0.6, bow.RelZ or 0)
-			local calc2, _, flight2 = prediction.SolveTrajectory(spawn, projSpeed, gravity, aimTarget, _saVelHistory[_velKey] or rawVel, playerGravity, plr.HipHeight, plr.Jumping and 42.6 or nil, rayCheck, (plr.Humanoid and plr.Humanoid.FloorMaterial == Enum.Material.Air) or math.abs(rawVel.Y) > 0.01, plr.RootPart.Position, plr.RootPart, nil, true)
-			if calc2 and flight2 then
-				calc = spawnPos + (calc2 - spawn)
-				flightTime = flight2
-			end
-		end
-		if not calc or not flightTime or flightTime > lifetime then return end
-
-		if targetinfo and targetinfo.Targets then
-			targetinfo.Targets[plr] = tick() + 1
-		end
-
-		return (calc - spawnPos).Unit * projSpeed
-	end
-
-	SilentAim = vape.Categories.Blatant:CreateModule({
-		Name = 'SilentAim',
-		Function = function(callback)
-			if callback then
-				if ProjectileAimbot and ProjectileAimbot.Enabled then
-					ProjectileAimbot:Toggle(false)
-					notif('SilentAim', 'turned off ProjectileAimbot, they cant both run at once gng', 4)
-				end
-				if SAFOVCircle and SAFOVCircle.Enabled then
-					runFOVCircle(true)
-				end
-				if not namecallHooked then
-					namecallHooked = true
-					namecall = hookmetamethod(game, '__namecall', newcclosure(function(...)
-						if not SilentAim.Enabled or checkcaller() or getnamecallmethod() ~= 'InvokeServer' then
-							return namecall(...)
-						end
-						local remote = ...
-						if typeof(remote) == 'Instance' and remote.Name == 'ProjectileFire' then
-							local args = table.pack(select(2, ...))
-							local ok, newVelocity = pcall(solveSilent, args)
-							if ok and typeof(newVelocity) == 'Vector3' then
-								args[6] = newVelocity
-								if AutoCharge.Enabled and typeof(args[8]) == 'table' then
-									local sourceTool = args[1]
-									local itemMeta = sourceTool and bedwars.ItemMeta[sourceTool.Name]
-									local sourceMeta = itemMeta and itemMeta.projectileSource
-									local maxCharge = tonumber(sourceMeta and sourceMeta.maxStrengthChargeSec)
-										or tonumber(sourceMeta and sourceMeta.maxDrawDurationSeconds)
-
-									if maxCharge then
-										args[8].drawDurationSec = maxCharge * math.clamp(skidChargePercent.Value / 100, 0, 1)
-									end
-								end
-							end
-							local self = ...
-							return self.InvokeServer(self, table.unpack(args, 1, args.n))
-						end
-						return namecall(...)
-					end))
-				end
-			else
-				lockedRandomPart = nil
-				table.clear(_saVelHistory)
-				table.clear(_saVelStamp)
-				runFOVCircle(false)
-			end
-		end,
-		Tooltip = 'hooks the projectile remote n sends diff args so it hits em where u aim on ur screen'
+	
+	SilentAim = vape.Categories.Combat:CreateModule({
+	    Name = "SilentAim",
+	    Function = function(Callback: boolean)
+	        if Callback and not canDebug then
+	            SilentAim:Clean(vape.Libraries.cheatengine.ProjectileAim.Bind({
+	                Solve = function(LaunchData, Origin: Vector3, Speed: number): Vector3?
+	                    local Success, Velocity = pcall(SolveSilent, {nil, nil, LaunchData.projectile, Origin, nil, Camera.CFrame.LookVector * Speed})
+	                    if Success and typeof(Velocity) == "Vector3" then
+	                        return Velocity.Unit
+	                    elseif not Success and shared.VapeDeveloper and tick() > LastWarn then
+	                        LastWarn = tick() + 5
+	                        warn(`[catvape] silentaim solve failed: {Velocity}`)
+	                    end
+	
+	                    return nil
+	                end
+	            }))
+	            return
+	        end
+	        if Callback and not OldNamecall then
+	            OldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(...)
+	                if SilentAim.Enabled and not checkcaller() and getnamecallmethod() == "InvokeServer" and tostring(...) == "ProjectileFire" then
+	                    local self = ...
+	                    local Arguments = table.pack(select(2, ...))
+	                    local Success, NewVelocity = pcall(SolveSilent, Arguments)
+	                    if Success and typeof(NewVelocity) == "Vector3" then
+	                        Arguments[6] = NewVelocity
+	                    elseif not Success and shared.VapeDeveloper and tick() > LastWarn then
+	                        LastWarn = tick() + 5
+	                        warn(`[catvape] silentaim solve failed: {NewVelocity}`)
+	                    end
+	                    return self.InvokeServer(self, table.unpack(Arguments, 1, Arguments.n))
+	                end
+	                return OldNamecall(...)
+	            end))
+	        end
+	    end,
+	    Tooltip = "Redirects only the projectile values sent to the server, so enemies get hit while your shot flies exactly where you aimed on your own screen. Without native hooks (Solara, Xeno) the shot is turned at release instead and the trajectory preview is left untouched"
 	})
-
+	
 	Targets = SilentAim:CreateTargets({
-		Players = true,
-		NPCs = true,
-		Walls = true
+	    Players = true,
+	    Walls = true
 	})
-
 	TargetPart = SilentAim:CreateDropdown({
-		Name = 'Part',
-		List = {'Dynamic', 'RootPart', 'Head', 'Closest', 'Randomize'},
-		Default = 'RootPart',
-		Function = function()
-			lockedRandomPart = nil
-		end
+	    Name = "Part",
+	    List = {"RootPart", "Head", "Torso", "Left arm", "Right arm", "Left leg", "Right leg", "Random", "Dynamic", "Closest"}
 	})
-
-	SortMethod = SilentAim:CreateDropdown({
-		Name = 'Sort Method',
-		List = getSortList({'Distance', 'Damage', 'Cursor'}),
-		Default = 'Cursor',
+	local Methods: {string} = {"Damage", "Distance"}
+	for _, v: string in SortList do
+	    if not table.find(Methods, v) then
+	        table.insert(Methods, v)
+	    end
+	end
+	Sort = SilentAim:CreateDropdown({
+	    Name = "Target Mode",
+	    List = Methods,
+	    Default = "Distance"
 	})
-
-	Range = SilentAim:CreateSlider({
-		Name = 'Range',
-		Min = 10,
-		Max = 500,
-		Default = 100,
+	Prediction = SilentAim:CreateSlider({
+	    Name = "Prediction",
+	    Min = 0.1,
+	    Max = 2,
+	    Default = 1,
+	    Decimal = 10
 	})
-
 	FOV = SilentAim:CreateSlider({
-		Name = 'FOV',
-		Min = 1,
-		Max = 1000,
-		Default = 300,
+	    Name = "FOV",
+	    Min = 1,
+	    Max = 1000,
+	    Default = 1000
 	})
-
-	SAFOVCircle = SilentAim:CreateToggle({
-		Name = 'FOV Circle',
-		Function = function(call)
-			if SilentAim.Enabled then
-				runFOVCircle(call)
-			end
-		end
+	HitChance = SilentAim:CreateTwoSlider({
+	    Name = "Hit Chance",
+	    Min = 0,
+	    Max = 100,
+	    DefaultMin = 100,
+	    DefaultMax = 100,
+	    Tooltip = "Chance in % for each shot to be redirected, rolled fresh between the two values on every shot. A missed roll leaves the shot where you aimed"
 	})
-
-	RandomHeadPercent = SilentAim:CreateSlider({
-		Name = 'Head Chance',
-		Min = 0,
-		Max = 100,
-		Default = 50,
-		Darker = true,
-		Visible = false
+	HeadshotChance = SilentAim:CreateTwoSlider({
+	    Name = "Headshot Chance",
+	    Min = 0,
+	    Max = 100,
+	    DefaultMin = 0,
+	    DefaultMax = 0,
+	    Tooltip = "Chance in % for each redirected shot to aim at the head instead of the Part setting, rolled fresh between the two values on every shot"
 	})
-
-	RandomTorsoPercent = SilentAim:CreateSlider({
-		Name = 'Torso Chance',
-		Min = 0,
-		Max = 100,
-		Default = 50,
-		Darker = true,
-		Visible = false,
-		Function = function(val)
-			if RandomHeadPercent and (RandomHeadPercent.Value + val) > 100 then
-				notif('SilentAim', 'head or torso chance is more than 100% so root part will never be picked..', 3)
-			end
-		end
-	})
-
-	local function updateRandomizeVisibility()
-		local vis = (TargetPart.Value == 'Randomize')
-		RandomHeadPercent.Object.Visible = vis
-		RandomTorsoPercent.Object.Visible = vis
-	end
-	if TargetPart.AddHook then
-		TargetPart:AddHook(updateRandomizeVisibility)
-	end
-	updateRandomizeVisibility()
-
 	OtherProjectiles = SilentAim:CreateToggle({
-		Name = 'Other Projectiles',
-		Default = true,
-		Function = function(call)
-			if Blacklist then Blacklist.Object.Visible = call end
-		end
+	    Name = "Other Projectiles",
+	    Function = function(Callback: boolean)
+	        if Blacklist then
+	            Blacklist.Object.Visible = Callback
+	        end
+	    end,
+	    Default = true
 	})
 	Blacklist = SilentAim:CreateTextList({
-		Name = 'Blacklist',
-		Darker = true,
-		Default = {'telepearl'},
-		Visible = OtherProjectiles.Enabled
-	})
-	AutoCharge = SilentAim:CreateToggle({
-		Name = 'AutoCharge',
-		Default = true,
-		Function = function(v)
-			if skidChargePercent and skidChargePercent.Object then skidChargePercent.Object.Visible = v end
-		end
-	})
-	skidChargePercent = SilentAim:CreateSlider({
-		Name = 'Charge Percent',
-		Min = 1,
-		Max = 100,
-		Default = 100,
+	    Name = "Blacklist",
+	    Default = {"gloop", "telepearl"},
+	    Darker = true,
+	    Placeholder = "projectile"
 	})
 end)
 
