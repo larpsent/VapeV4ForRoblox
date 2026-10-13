@@ -4658,7 +4658,7 @@ run(function()
 	})
 end)
 
-run(function()
+Run(function()
 	local SilentAim
 	local Targets
 	local TargetPart
