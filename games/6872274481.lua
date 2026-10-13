@@ -3587,51 +3587,6 @@ run(function()
 	end)
 end)
 
-Run(function()
-	local SwordTiming = vape.Libraries.swordtiming
-	local HitregAdjuster
-	local Hitreg
-	local SwordSpeed, SwingSpeed, SwingRestore
-	local HitBudget: number = 60 / bedwars.Handler:Get("SwordHit"):GetRateLimit()
-	
-	HitregAdjuster = vape.Categories.Combat:CreateModule({
-	    Name = "HitregAdjuster",
-	    Function = function(Callback: boolean)
-	        if Callback then
-	            SwingSpeed = bedwars.SyncEvents.SwordSwing:setPriority(150):connect(function(Event)
-	                SwordSpeed = Event.attackSpeed
-	                local Fury: number = bedwars.StatusEffectUtil:isActive(LocalPlayer.Character, "fury_potion") and 1 - (bedwars.BlackMarketeerBalance.FURY_POTION_ATTACK_SPEED_MULTIPLIER - 1) or 1
-	                local BaseSpeed: number = SwordSpeed / Fury
-	                local Meta = bedwars.ItemMeta[Event.swordType]
-	                local MetaSpeed: number? = Meta and Meta.sword and Meta.sword.attackSpeed
-	                if MetaSpeed and math.abs(BaseSpeed - MetaSpeed) < 0.000001 then BaseSpeed = MetaSpeed end
-	                local Spacing, _, _, Cooldown = SwordTiming.Calculate(BaseSpeed, Fury, Hitreg.Value >= 35, HitBudget, Hitreg.Value)
-	                Event.attackSpeed = math.max(Spacing, Cooldown)
-	            end)
-	            SwingRestore = bedwars.SyncEvents.SwordSwing:setPriority(300):connect(function(Event)
-	                Event.attackSpeed = SwordSpeed
-	            end)
-	            HitregAdjuster:Clean(function()
-	                SwingSpeed:Destroy()
-	                SwingRestore:Destroy()
-	            end)
-	        end
-	    end,
-	    Tooltip = "Swaps the games attack cooldown for a hit count of your own"
-	})
-	
-	Hitreg = HitregAdjuster:CreateSlider({
-	    Name = "Hitreg",
-	    Min = 1,
-	    Max = 36,
-	    Default = 35,
-	    Suffix = function(Val: number)
-	        return Val == 1 and "hit / 10s" or "hits / 10s"
-	    end,
-	    Tooltip = "Spacing your manual and autoclicker hits fire at, 35 is the killaura spacing (fury potion still speeds it up)"
-	})
-end)
-
 run(function()
 	local KnockbackDisplace
 	local KBDirection
